@@ -1,0 +1,1 @@
+# gb-go-best-practices
