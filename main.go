@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,6 +14,8 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/pkg/errors"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 type crawlResult struct {
@@ -36,6 +38,14 @@ func newCrawler(maxDepth int) *crawler {
 
 // scan pages recursively
 func (c *crawler) run(ctx context.Context, url string, results chan<- crawlResult, depth int) {
+	defer func() {
+		if r := recover(); r != nil {
+			results <- crawlResult{
+				err: errors.Errorf("panic: %v on url: %s", r, url),
+			}
+		}
+	}()
+
 	if c.checkVisited(url) {
 		return
 	}
@@ -43,8 +53,12 @@ func (c *crawler) run(ctx context.Context, url string, results chan<- crawlResul
 		return
 	}
 
-	// log.Printf("crawling %s, depth %d\n", url, depth)
-	// time.Sleep(1 * time.Second)
+	if rand.Intn(12) == 0 {
+		panic("random panic")
+	}
+
+	log.Trace().Msgf("crawling %s, depth %d", url, depth)
+	time.Sleep(1 * time.Second)
 
 	select {
 	case <-ctx.Done():
@@ -61,7 +75,7 @@ func (c *crawler) run(ctx context.Context, url string, results chan<- crawlResul
 		defer func() {
 			err := resp.Body.Close()
 			if err != nil {
-				log.Printf("close body error: %v\n", err)
+				log.Error().Msgf("close body error: %v", err)
 			}
 		}()
 		if resp.StatusCode != 200 {
@@ -128,17 +142,32 @@ func processResults(ctx context.Context, results <-chan crawlResult) {
 			return
 		case msg := <-results:
 			if msg.err != nil {
-				log.Printf("%s\n", msg.err)
+				log.Error().Msgf("%s", msg.err)
 			} else {
-				log.Printf("%s\n", msg.msg)
+				log.Info().Msgf("%s", msg.msg)
 			}
 		}
 	}
 }
 
+func setup() {
+
+	zerolog.TimeFieldFormat = ""
+	zerolog.TimestampFunc = func() time.Time {
+		return time.Date(2008, 1, 8, 17, 5, 05, 0, time.UTC)
+	}
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+
+	log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
+}
+
 func main() {
-	log.Printf("Program started, pid: %d\n", os.Getpid())
+	setup()
+
+	log.Debug().Msgf("Program started, pid: %d", os.Getpid())
 	started := time.Now()
+
+	rand.Seed(time.Now().UnixNano())
 
 	depthLimit := 1
 	url := "https://pkg.go.dev"
@@ -154,7 +183,7 @@ func main() {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Running time", time.Since(started))
+			log.Debug().Msgf("Running time %v", time.Since(started))
 			return
 		case sig := <-osSignalChan:
 			if sig == syscall.SIGINT {
@@ -162,7 +191,7 @@ func main() {
 			}
 			if sig == syscall.SIGUSR1 {
 				crawler.maxDepth += 2
-				log.Printf("depth increased to %d", crawler.maxDepth)
+				log.Trace().Msgf("depth increased to %d", crawler.maxDepth)
 			}
 		}
 	}
